@@ -37,7 +37,7 @@ def run(topic: str):
     print(final["final_report"])
     
     # Save to file
-    with open("report.md", "w") as f:
+    with open("report.md", "w", encoding="utf-8") as f:
         f.write(final["final_report"])
     print("\n✅ Report saved to report.md")
 
