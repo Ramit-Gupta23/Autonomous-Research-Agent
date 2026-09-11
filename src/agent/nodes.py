@@ -7,7 +7,7 @@ from src.agent.state import ResearchState
 from src.tools.arxiv_tool import search_arxiv
 from src.tools.web_search import search_web
 from dotenv import load_dotenv
-
+import src.cache.chroma_cache as cache
 load_dotenv()
 
 llm = ChatGroq(
@@ -80,23 +80,34 @@ Example format: ["query1", "query2", "query3", "query4", "query5"]"""),
 # ─────────────────────────────────────────
 def web_search_node(state: ResearchState) -> dict:
     try:
-        # Agar queries hi nahi hain toh kuch nahi kar sakte
         if not state.get("search_queries"):
             return {
                 "web_results": [],
-                "current_step": "⚠️ Web search skipped — no queries found"
+                "current_step": "⚠️ Web search skipped — no queries"
             }
 
-        all_results = []
+        # ── Cache check ──
+        cached = cache.get_web_results(state["topic"])
+        if cached:
+            return {
+                "web_results": cached,
+                "current_step": f"📦 Web results from cache — {len(cached)} sources"
+            }
 
-        for query in state["search_queries"][2:]:  # Last 3 = news queries
+        # ── Cache miss — actual search karo ──
+        all_results = []
+        for query in state["search_queries"][2:]:
             try:
                 results = search_web(query, max_results=3)
                 all_results.extend(results)
-                time.sleep(1)  # Tavily ko breathe karne do
+                time.sleep(1)
             except Exception as e:
-                print(f"⚠️ Web search failed for query '{query}': {e}")
-                continue  # Ek query fail ho toh agle pe jao
+                print(f"⚠️ Web search failed for '{query}': {e}")
+                continue
+
+        # ── Results cache mein save karo ──
+        if all_results:
+            cache.save_web_results(state["topic"], all_results)
 
         return {
             "web_results": all_results,
@@ -107,7 +118,7 @@ def web_search_node(state: ResearchState) -> dict:
         print(f"⚠️ Web search node failed: {e}")
         return {
             "web_results": [],
-            "current_step": "⚠️ Web search failed — continuing without web results"
+            "current_step": "⚠️ Web search failed"
         }
 
 
@@ -119,33 +130,43 @@ def arxiv_search_node(state: ResearchState) -> dict:
         if not state.get("search_queries"):
             return {
                 "arxiv_results": [],
-                "current_step": "⚠️ Arxiv search skipped — no queries found"
+                "current_step": "⚠️ Arxiv skipped — no queries"
             }
 
-        all_results = []
+        # ── Cache check ──
+        cached = cache.get_arxiv_results(state["topic"])
+        if cached:
+            return {
+                "arxiv_results": cached,
+                "current_step": f"📦 Arxiv results from cache — {len(cached)} papers"
+            }
 
-        for query in state["search_queries"][:2]:  # First 2 = academic queries
+        # ── Cache miss — actual search karo ──
+        all_results = []
+        for query in state["search_queries"][:2]:
             try:
                 results = search_arxiv(query, max_results=3)
                 all_results.extend(results)
-                time.sleep(3)  # Arxiv strict rate limit hai
+                time.sleep(3)
             except Exception as e:
-                print(f"⚠️ Arxiv failed for query '{query}': {e}")
+                print(f"⚠️ Arxiv failed for '{query}': {e}")
                 continue
+
+        # ── Results cache mein save karo ──
+        if all_results:
+            cache.save_arxiv_results(state["topic"], all_results)
 
         return {
             "arxiv_results": all_results,
-            "current_step": f"📚 Arxiv search done — {len(all_results)} papers found"
+            "current_step": f"📚 Arxiv done — {len(all_results)} papers found"
         }
 
     except Exception as e:
         print(f"⚠️ Arxiv node failed: {e}")
         return {
             "arxiv_results": [],
-            "current_step": "⚠️ Arxiv failed — continuing without papers"
+            "current_step": "⚠️ Arxiv failed"
         }
-
-
 # ─────────────────────────────────────────
 # NODE 4: EXTRACTOR
 # ─────────────────────────────────────────
