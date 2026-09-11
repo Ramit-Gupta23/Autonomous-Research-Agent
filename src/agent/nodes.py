@@ -7,7 +7,7 @@ from src.agent.state import ResearchState
 from src.tools.arxiv_tool import search_arxiv
 from src.tools.web_search import search_web
 from dotenv import load_dotenv
-import src.cache.chroma_cache as cache
+from src.cache.chroma_cache import cache
 load_dotenv()
 
 llm = ChatGroq(
@@ -285,27 +285,29 @@ Return ONLY valid JSON in this exact format. No markdown:
 # NODE 6: REPORTER
 # ─────────────────────────────────────────
 def reporter_node(state: ResearchState) -> dict:
-    try:
-        key_facts     = state.get("key_facts", [])
-        contradictions = state.get("contradictions", [])
-        gaps          = state.get("knowledge_gaps", [])
-        web_results   = state.get("web_results", [])
-        arxiv_results = state.get("arxiv_results", [])
+    key_facts = state.get("key_facts", [])
+    contradictions = state.get("contradictions", [])
+    gaps = state.get("knowledge_gaps", [])
+    web_results = state.get("web_results", [])
+    arxiv_results = state.get("arxiv_results", [])
 
-        # Kuch bhi nahi mila toh bhi ek basic report banao
-        if not key_facts:
-            return {
-                "final_report": f"# {state['topic']} — Research Report\n\nNo data could be retrieved for this topic. Please try again.",
-                "current_step": "⚠️ Report generation failed — no data available"
-            }
+    if not key_facts:
+        return {
+            "final_report": f"# {state['topic']} — Research Report\n\nNo data could be retrieved.",
+            "current_step": "⚠️ Report generation failed — no data available"
+        }
 
-        facts_text         = "\n".join([f"- {f}" for f in key_facts])
-        contradictions_text = "\n".join([f"- {c}" for c in contradictions]) or "None identified"
-        gaps_text          = "\n".join([f"- {g}" for g in gaps]) or "None identified"
-        total_sources      = len(web_results) + len(arxiv_results)
+    facts_text = "\n".join([f"- {f}" for f in key_facts])
+    contradictions_text = "\n".join([f"- {c}" for c in contradictions]) or "None identified"
+    gaps_text = "\n".join([f"- {g}" for g in gaps]) or "None identified"
+    total_sources = len(web_results) + len(arxiv_results)
 
-        response = llm.invoke([
-            SystemMessage(content="""You are a professional research report writer.
+    max_retries = 3
+
+    for attempt in range(max_retries):
+        try:
+            response = llm.invoke([
+                SystemMessage(content="""You are a professional research report writer.
 Write a comprehensive, well-structured markdown research report.
 
 REQUIRED SECTIONS (use these exact headings):
@@ -317,7 +319,7 @@ REQUIRED SECTIONS (use these exact headings):
 ## Conclusion
 
 Make it specific, professional, and insightful."""),
-            HumanMessage(content=f"""
+                HumanMessage(content=f"""
 Topic: {state['topic']}
 Total Sources Analyzed: {total_sources}
 
@@ -330,28 +332,30 @@ Contradictions Found:
 Knowledge Gaps:
 {gaps_text}
 """)
-        ])
+            ])
 
-        return {
-            "final_report": response.content,
-            "current_step": "✅ Report generation complete!"
-        }
+            return {
+                "final_report": response.content,
+                "current_step": "✅ Report generation complete!"
+            }
 
-    except Exception as e:
-        print(f"⚠️ Reporter failed: {e}")
-        # Last resort — basic report manually banao
-        basic_report = f"""# {state['topic']} - Research Report
-
-## Executive Summary
-Research was conducted on {state['topic']} but report generation encountered an error.
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                wait = (attempt + 1) * 5
+                print(f"⚠️ Rate limit — waiting {wait}s then retrying...")
+                time.sleep(wait)
+                continue
+            else:
+                # Sabse last mein bhi fail ho toh basic report
+                basic_report = f"""# {state['topic']} - Research Report
 
 ## Key Facts Found
-{chr(10).join([f"- {f}" for f in state.get('key_facts', ['No facts available'])])}
+{chr(10).join([f"- {f}" for f in key_facts])}
 
 ## Error
-Reporter node failed: {str(e)}
+Reporter failed: {str(e)}
 """
-        return {
-            "final_report": basic_report,
-            "current_step": "⚠️ Report used fallback template due to error"
-        }
+                return {
+                    "final_report": basic_report,
+                    "current_step": "⚠️ Report used fallback template"
+                }
